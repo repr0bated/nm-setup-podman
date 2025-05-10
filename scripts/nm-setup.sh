@@ -46,7 +46,7 @@ fi
 [ ! -d $NMDIR ] && mkdir -p $NMDIR
 
 # Create config directory
-CONFIG_DIR=$NMDIR/config
+CONFIG_DIR="./config"
 [ ! -d $CONFIG_DIR ] && mkdir -p $CONFIG_DIR
 
 # Prepare broker configuration
@@ -84,23 +84,6 @@ authorization {
   deny_action = ignore
 }
 EOF
-
-# Generate EMQX certificates
-echo "Generating EMQX certificates..."
-mkdir -p $CONFIG_DIR/emqx-certs
-openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 -nodes \
-    -keyout $CONFIG_DIR/emqx-certs/server.key \
-    -out $CONFIG_DIR/emqx-certs/server.pem \
-    -subj "/CN=broker.$DOMAIN" \
-    -addext "subjectAltName = DNS:broker.$DOMAIN,DNS:*.broker.$DOMAIN"
-
-# Copy root certificate
-cp $CONFIG_DIR/selfsigned.crt $CONFIG_DIR/emqx-certs/root.pem
-
-# Create EMQX certs volume and copy certificates
-echo "Setting up EMQX certificates..."
-podman volume create netmaker-certs
-podman run --rm -v netmaker-certs:/certs -v $CONFIG_DIR/emqx-certs:/source alpine sh -c "cp /source/server.key /certs/ && cp /source/server.pem /certs/ && cp /source/root.pem /certs/"
 
 # Prepare reverse proxy certificates
 if [ ! -f $CONFIG_DIR/selfsigned.key ]; then
@@ -142,6 +125,18 @@ EOF
     rm $CONFIG_DIR/openssl.cnf
 fi
 
+# Generate EMQX certificates
+echo "Generating EMQX certificates..."
+mkdir -p $CONFIG_DIR/emqx-certs
+openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 -nodes \
+    -keyout $CONFIG_DIR/emqx-certs/server.key \
+    -out $CONFIG_DIR/emqx-certs/server.pem \
+    -subj "/CN=broker.$DOMAIN" \
+    -addext "subjectAltName = DNS:broker.$DOMAIN,DNS:*.broker.$DOMAIN"
+
+# Copy root certificate
+cp $CONFIG_DIR/selfsigned.crt $CONFIG_DIR/emqx-certs/root.pem
+
 # Prepare reverse proxy configuration
 [ ! -f $CONFIG_DIR/nginx.conf ] && cat << EOF > $CONFIG_DIR/nginx.conf
 user  nginx;
@@ -175,7 +170,7 @@ http {
         ssl_certificate_key /etc/nginx/ssl/selfsigned.key;
 
         location / {
-            proxy_pass   http://127.0.0.1:8081;
+            proxy_pass   http://netmaker-server:8081;
         }
 
         error_page   500 502 503 504  /50x.html;
@@ -192,7 +187,7 @@ http {
         ssl_certificate_key /etc/nginx/ssl/selfsigned.key;
 
         location / {
-            proxy_pass   http://127.0.0.1:80;
+            proxy_pass   http://netmaker-ui:80;
         }
 
         error_page   500 502 503 504  /50x.html;
@@ -204,7 +199,7 @@ http {
 EOF
 
 # Create podman-compose.yml
-cat << EOF > $NMDIR/podman-compose.yml
+cat << EOF > podman-compose.yml
 version: '3.8'
 
 services:
@@ -220,7 +215,7 @@ services:
       - MASTER_KEY=TODO_REPLACE_MASTER_KEY
       - DATABASE=sqlite
       - NODE_ID=netmaker-server
-      - MQ_HOST=localhost
+      - MQ_HOST=netmaker-mq
       - MQ_PORT=$BROKER_PORT
       - TELEMETRY=off
       - VERBOSITY=3
@@ -240,12 +235,12 @@ services:
     image: emqx/emqx:latest
     container_name: netmaker-mq
     volumes:
-      - $CONFIG_DIR/emqx.conf:/opt/emqx/etc/emqx.conf
+      - ./config/emqx.conf:/opt/emqx/etc/emqx.conf
       - netmaker-mq-data:/opt/emqx/data
       - netmaker-mq-logs:/opt/emqx/log
-      - netmaker-certs:/etc/emqx/certs
+      - ./config/emqx-certs:/etc/emqx/certs
     environment:
-      - EMQX_NODE__NAME=emqx@127.0.0.1
+      - EMQX_NODE__NAME=emqx@netmaker-mq
       - EMQX_NODE__COOKIE=emqxsecretcookie
       - EMQX_NODE__DATA_DIR=/opt/emqx/data
       - EMQX_NODE__DB_BACKEND=mnesia
@@ -266,9 +261,9 @@ services:
     image: nginx
     container_name: netmaker-proxy
     volumes:
-      - $CONFIG_DIR/nginx.conf:/etc/nginx/nginx.conf:ro
-      - $CONFIG_DIR/selfsigned.key:/etc/nginx/ssl/selfsigned.key
-      - $CONFIG_DIR/selfsigned.crt:/etc/nginx/ssl/selfsigned.crt
+      - ./config/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./config/selfsigned.key:/etc/nginx/ssl/selfsigned.key
+      - ./config/selfsigned.crt:/etc/nginx/ssl/selfsigned.crt
     restart: unless-stopped
     pod: netmaker
 
@@ -279,19 +274,10 @@ volumes:
   netmaker-certs:
 EOF
 
-# Create the pod first
-echo "Creating netmaker pod..."
-podman pod create --name netmaker -p 8081:8081 -p 8883:8883 -p 1883:1883 -p 8080:8080 -p 8443:8443
-
-# Start the services
-echo "Starting services..."
-podman-compose -f $NMDIR/podman-compose.yml up -d
-
-# Wait for EMQX to be ready
-echo "Waiting for EMQX to be ready..."
-sleep 10
-
-# Configure EMQX users and permissions
-echo "Configuring EMQX..."
-podman exec netmaker-mq emqx_ctl users add netmaker netmaker
-podman exec netmaker-mq emqx_ctl acl add username netmaker topic "#" allow
+echo "Setup completed. To start the services, run:"
+echo "podman pod create --name netmaker -p $SERVER_PORT:8443 -p $BROKER_PORT:8883 -p 1883:1883 -p $DASHBOARD_PORT:8080"
+echo "podman-compose up -d"
+echo ""
+echo "After services are up, configure EMQX with:"
+echo "podman exec netmaker-mq emqx_ctl users add netmaker netmaker"
+echo "podman exec netmaker-mq emqx_ctl acl add username netmaker topic \"#\" allow"

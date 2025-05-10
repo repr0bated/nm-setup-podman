@@ -1,0 +1,32 @@
+node {
+  name = "emqx@127.0.0.1"
+  cookie = "emqxsecretcookie"
+}
+
+listeners.ssl.default {
+  bind = "0.0.0.0:8883"
+  ssl_options {
+    keyfile = "/etc/emqx/certs/server.key"
+    certfile = "/etc/emqx/certs/server.pem"
+    cacertfile = "/etc/emqx/certs/root.pem"
+    verify = verify_peer
+  }
+}
+
+listeners.tcp.default {
+  bind = "0.0.0.0:1883"
+}
+
+authentication = [
+  {
+    mechanism = "password_based"
+    backend = "built_in_database"
+    enable = true
+  }
+]
+
+authorization {
+  sources = ["file", "http", "built_in_database"]
+  no_match = allow
+  deny_action = ignore
+} 
