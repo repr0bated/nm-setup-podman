@@ -190,8 +190,6 @@ EOF
 cat << EOF > $NMDIR/podman-compose.yml
 version: '3.8'
 
-name: netmaker
-
 services:
   netmaker-server:
     image: gravitl/netmaker:latest
@@ -219,6 +217,7 @@ services:
       - net.ipv6.conf.all.disable_ipv6=0
       - net.ipv6.conf.all.forwarding=1
     restart: unless-stopped
+    pod: netmaker
 
   netmaker-mq:
     image: emqx/emqx:latest
@@ -236,6 +235,7 @@ services:
       - EMQX_CLUSTER__PROTO_DIST=inet_tcp
       - EMQX_NODE__DIST_NET_TICKTIME=120
     restart: unless-stopped
+    pod: netmaker
 
   netmaker-ui:
     image: gravitl/netmaker-ui:latest
@@ -243,6 +243,7 @@ services:
     environment:
       - BACKEND_URL=https://api.$DOMAIN:$SERVER_PORT
     restart: unless-stopped
+    pod: netmaker
 
   netmaker-proxy:
     image: nginx
@@ -252,21 +253,22 @@ services:
       - $CONFIG_DIR/selfsigned.key:/etc/nginx/ssl/selfsigned.key
       - $CONFIG_DIR/selfsigned.crt:/etc/nginx/ssl/selfsigned.crt
     restart: unless-stopped
+    pod: netmaker
 
 volumes:
   netmaker-data:
   netmaker-mq-data:
   netmaker-mq-logs:
   netmaker-certs:
-
-pods:
-  netmaker:
-    ports:
-      - "$SERVER_PORT:8443"
-      - "$BROKER_PORT:8883"
-      - "$DASHBOARD_PORT:8080"
-      - "51821-51830:51821-51830/udp"
 EOF
+
+# Create the pod first
+echo "Creating netmaker pod..."
+podman pod create -n netmaker \
+    -p $SERVER_PORT:8443 \
+    -p $BROKER_PORT:8883 \
+    -p $DASHBOARD_PORT:8080 \
+    -p 51821-51830:51821-51830/udp
 
 # Start the services
 echo "Starting Netmaker services..."
