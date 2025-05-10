@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+  netmaker-server:
+    image: gravitl/netmaker:latest
+    container_name: netmaker-server
+    volumes:
+      - netmaker-data:/root/data
+      - netmaker-certs:/etc/netmaker
+    environment:
+      - SERVER_NAME=broker.${DOMAIN}
+      - SERVER_API_CONN_STRING=api.${DOMAIN}:${SERVER_PORT}
+      - MASTER_KEY=TODO_REPLACE_MASTER_KEY
+      - DATABASE=sqlite
+      - NODE_ID=netmaker-server
+      - MQ_HOST=localhost
+      - MQ_PORT=${BROKER_PORT}
+      - TELEMETRY=off
+      - VERBOSITY=3
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_MODULE
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv4.conf.all.src_valid_mark=1
+      - net.ipv6.conf.all.disable_ipv6=0
+      - net.ipv6.conf.all.forwarding=1
+    restart: unless-stopped
+
+  netmaker-mq:
+    image: emqx/emqx:latest
+    container_name: netmaker-mq
+    volumes:
+      - ./config/emqx.conf:/opt/emqx/etc/emqx.conf
+      - netmaker-mq-data:/opt/emqx/data
+      - netmaker-mq-logs:/opt/emqx/log
+      - netmaker-certs:/etc/emqx/certs
+    environment:
+      - EMQX_NODE__NAME=emqx@127.0.0.1
+      - EMQX_NODE__COOKIE=emqxsecretcookie
+      - EMQX_NODE__DATA_DIR=/opt/emqx/data
+      - EMQX_NODE__DB_BACKEND=mnesia
+      - EMQX_CLUSTER__PROTO_DIST=inet_tcp
+      - EMQX_NODE__DIST_NET_TICKTIME=120
+    restart: unless-stopped
+
+  netmaker-ui:
+    image: gravitl/netmaker-ui:latest
+    container_name: netmaker-ui
+    environment:
+      - BACKEND_URL=https://api.${DOMAIN}:${SERVER_PORT}
+    restart: unless-stopped
+
+  netmaker-proxy:
+    image: nginx
+    container_name: netmaker-proxy
+    volumes:
+      - ./config/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./config/selfsigned.key:/etc/nginx/ssl/selfsigned.key
+      - ./config/selfsigned.crt:/etc/nginx/ssl/selfsigned.crt
+    restart: unless-stopped
+
+volumes:
+  netmaker-data:
+  netmaker-mq-data:
+  netmaker-mq-logs:
+  netmaker-certs: 

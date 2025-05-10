@@ -81,13 +81,36 @@ EOF
 # Prepare reverse proxy certificates
 if [ ! -f $CONFIG_DIR/selfsigned.key ]; then
     echo "Creating netmaker-proxy tls certificates ..."
+    # Create OpenSSL config
+    cat << EOF > $CONFIG_DIR/openssl.cnf
+[req]
+distinguished_name = req_distinguished_name
+req_extensions = v3_req
+prompt = no
+
+[req_distinguished_name]
+CN = $DOMAIN
+
+[v3_req]
+keyUsage = keyEncipherment, dataEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = $DOMAIN
+DNS.2 = *.$DOMAIN
+EOF
+
+    # Generate certificate using config
     openssl req -x509 \
         -newkey rsa:4096 -sha256 \
         -days 3650 -nodes \
         -keyout $CONFIG_DIR/selfsigned.key \
         -out $CONFIG_DIR/selfsigned.crt \
-        -subj "/CN=$DOMAIN" \
-        -addext "subjectAltName=DNS:$DOMAIN,DNS:*.$DOMAIN"
+        -config $CONFIG_DIR/openssl.cnf
+
+    # Clean up config
+    rm $CONFIG_DIR/openssl.cnf
 fi
 
 # Prepare reverse proxy configuration
