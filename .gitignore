@@ -1,0 +1,29 @@
+# Generated certificates and keys
+config/selfsigned.*
+config/emqx-certs/
+
+# Podman volumes
+netmaker-data/
+netmaker-mq-data/
+netmaker-mq-logs/
+netmaker-certs/
+
+# Generated configuration files
+config/emqx.conf
+config/nginx.conf
+config/openssl.cnf
+
+# Podman compose file
+podman-compose.yml
+
+# Logs
+*.log
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db 
