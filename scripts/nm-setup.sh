@@ -82,9 +82,20 @@ podman run -d --pod netmaker --name netmaker-server \
 
 # Prepare broker configuration
 [ ! -f $NMDIR/emqx.conf ] && cat << EOF > $NMDIR/emqx.conf
+# Node configuration
 node {
   name = "emqx@127.0.0.1"
   cookie = "emqxsecretcookie"
+  data_dir = "/opt/emqx/data"
+  db_backend = "mnesia"
+  dist_net_ticktime = 120
+}
+
+# Cluster configuration
+cluster {
+  proto_dist = "inet_tcp"
+  discovery = "manual"
+  core_nodes = ["emqx@127.0.0.1"]
 }
 
 # SSL/TLS Listener
