@@ -16,12 +16,60 @@ set -e
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 BASE_DIR="$(dirname "$SCRIPT_DIR")"
 COMPOSE_FILE="$BASE_DIR/podman-compose.yml"
+CONFIG_DIR="$BASE_DIR/config"
 
 if [ ! -f "$COMPOSE_FILE" ]; then
     echo "Error: podman-compose.yml not found at $COMPOSE_FILE"
     echo "Please run nmpod-setup.sh first"
     exit 1
 fi
+
+# Fix EMQX authorization configuration - update for compatibility
+echo "Updating EMQX configuration for compatibility..."
+cat > $CONFIG_DIR/emqx.conf << EOFEMQX
+node {
+  name = "emqx@netmaker-mq"
+  cookie = "$(grep 'cookie' $CONFIG_DIR/emqx.conf | cut -d'"' -f2)"
+}
+
+listeners.ssl.default {
+  bind = "0.0.0.0:8883"
+  ssl_options {
+    keyfile = "/etc/emqx/certs/server.key"
+    certfile = "/etc/emqx/certs/server.pem"
+    cacertfile = "/etc/emqx/certs/root.pem"
+    verify = verify_peer
+  }
+}
+
+listeners.tcp.default {
+  bind = "0.0.0.0:1883"
+}
+
+authentication = [
+  {
+    mechanism = "password_based"
+    backend = "built_in_database"
+    enable = true
+  }
+]
+
+# Updated authorization config format
+authorization {
+  no_match = allow
+  sources = [
+    {
+      type = "file"
+    },
+    {
+      type = "http"
+    },
+    {
+      type = "built_in_database"
+    }
+  ]
+}
+EOFEMQX
 
 # Create the pod with proper port mappings
 echo "Creating netmaker pod..."
