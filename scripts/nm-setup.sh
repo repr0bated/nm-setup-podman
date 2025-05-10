@@ -30,6 +30,13 @@ SERVER_PORT=${2:-8081}
 BROKER_PORT=${3:-8883}
 DASHBOARD_PORT=${4:-8080}
 
+# Validate domain
+if [ -z "$DOMAIN" ]; then
+    echo "Error: Domain name is required"
+    echo "Usage: $0 <domain> [server_port] [broker_port] [dashboard_port]"
+    exit 1
+fi
+
 # Directory containing volume data
 [ "${EUID:-$(id -u)}" -eq 0 ] \
     && NMDIR=/var/lib/netmaker \
@@ -89,7 +96,12 @@ req_extensions = v3_req
 prompt = no
 
 [req_distinguished_name]
-CN = $DOMAIN
+CN = ${DOMAIN}
+C = US
+ST = State
+L = City
+O = Organization
+OU = Unit
 
 [v3_req]
 keyUsage = keyEncipherment, dataEncipherment
@@ -97,8 +109,8 @@ extendedKeyUsage = serverAuth
 subjectAltName = @alt_names
 
 [alt_names]
-DNS.1 = $DOMAIN
-DNS.2 = *.$DOMAIN
+DNS.1 = ${DOMAIN}
+DNS.2 = *.${DOMAIN}
 EOF
 
     # Generate certificate using config
