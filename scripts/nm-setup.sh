@@ -85,6 +85,22 @@ authorization {
 }
 EOF
 
+# Generate EMQX certificates
+echo "Generating EMQX certificates..."
+mkdir -p $CONFIG_DIR/emqx-certs
+openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 -nodes \
+    -keyout $CONFIG_DIR/emqx-certs/server.key \
+    -out $CONFIG_DIR/emqx-certs/server.pem \
+    -subj "/CN=broker.$DOMAIN" \
+    -addext "subjectAltName = DNS:broker.$DOMAIN,DNS:*.broker.$DOMAIN"
+
+# Copy root certificate
+cp $CONFIG_DIR/selfsigned.crt $CONFIG_DIR/emqx-certs/root.pem
+
+# Create EMQX certs volume
+podman volume create netmaker-certs
+podman run --rm -v netmaker-certs:/certs -v $CONFIG_DIR/emqx-certs:/source alpine sh -c "cp /source/* /certs/"
+
 # Prepare reverse proxy certificates
 if [ ! -f $CONFIG_DIR/selfsigned.key ]; then
     echo "Creating netmaker-proxy tls certificates ..."
@@ -264,51 +280,17 @@ EOF
 
 # Create the pod first
 echo "Creating netmaker pod..."
-podman pod create -n netmaker \
-    -p $SERVER_PORT:8443 \
-    -p $BROKER_PORT:8883 \
-    -p $DASHBOARD_PORT:8080 \
-    -p 51821-51830:51821-51830/udp
+podman pod create --name netmaker -p 8081:8081 -p 8883:8883 -p 1883:1883 -p 8080:8080 -p 8443:8443
 
 # Start the services
-echo "Starting Netmaker services..."
-cd $NMDIR
-podman-compose up -d
+echo "Starting services..."
+podman-compose -f $NMDIR/podman-compose.yml up -d
 
-# Wait for EMQX to start
-echo "Waiting for EMQX to start..."
-max_attempts=30
-attempt=1
-while [ $attempt -le $max_attempts ]; do
-    if podman exec netmaker-mq emqx_ctl status >/dev/null 2>&1; then
-        echo "EMQX is ready!"
-        break
-    fi
-    echo "Waiting for EMQX to start (attempt $attempt/$max_attempts)..."
-    sleep 2
-    attempt=$((attempt + 1))
-done
+# Wait for EMQX to be ready
+echo "Waiting for EMQX to be ready..."
+sleep 10
 
-if [ $attempt -gt $max_attempts ]; then
-    echo "Error: EMQX failed to start within the expected time"
-    exit 1
-fi
-
-# Setup EMQX users and permissions
-echo "Setting up EMQX users and permissions..."
-# Wait a bit more to ensure EMQX is fully initialized
-sleep 5
-
-# Add user if it doesn't exist
-if ! podman exec netmaker-mq emqx_ctl users list | grep -q "netmaker"; then
-    echo "Creating EMQX user..."
-    podman exec netmaker-mq emqx_ctl users add netmaker netmaker_password
-fi
-
-# Add ACL if it doesn't exist
-if ! podman exec netmaker-mq emqx_ctl acl list | grep -q "netmaker"; then
-    echo "Setting up EMQX ACL..."
-    podman exec netmaker-mq emqx_ctl acl add username netmaker topic "#" allow
-fi
-
-echo "EMQX configuration completed successfully"
+# Configure EMQX users and permissions
+echo "Configuring EMQX..."
+podman exec netmaker-mq emqx_ctl users add netmaker netmaker
+podman exec netmaker-mq emqx_ctl acl add username netmaker topic "#" allow

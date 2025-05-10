@@ -13,7 +13,7 @@ services:
       - MASTER_KEY=TODO_REPLACE_MASTER_KEY
       - DATABASE=sqlite
       - NODE_ID=netmaker-server
-      - MQ_HOST=localhost
+      - MQ_HOST=netmaker-mq
       - MQ_PORT=${BROKER_PORT}
       - TELEMETRY=off
       - VERBOSITY=3
@@ -27,6 +27,7 @@ services:
       - net.ipv6.conf.all.disable_ipv6=0
       - net.ipv6.conf.all.forwarding=1
     restart: unless-stopped
+    pod: netmaker
 
   netmaker-mq:
     image: emqx/emqx:latest
@@ -37,13 +38,14 @@ services:
       - netmaker-mq-logs:/opt/emqx/log
       - netmaker-certs:/etc/emqx/certs
     environment:
-      - EMQX_NODE__NAME=emqx@127.0.0.1
+      - EMQX_NODE__NAME=emqx@netmaker-mq
       - EMQX_NODE__COOKIE=emqxsecretcookie
       - EMQX_NODE__DATA_DIR=/opt/emqx/data
       - EMQX_NODE__DB_BACKEND=mnesia
       - EMQX_CLUSTER__PROTO_DIST=inet_tcp
       - EMQX_NODE__DIST_NET_TICKTIME=120
     restart: unless-stopped
+    pod: netmaker
 
   netmaker-ui:
     image: gravitl/netmaker-ui:latest
@@ -51,6 +53,7 @@ services:
     environment:
       - BACKEND_URL=https://api.${DOMAIN}:${SERVER_PORT}
     restart: unless-stopped
+    pod: netmaker
 
   netmaker-proxy:
     image: nginx
@@ -60,6 +63,7 @@ services:
       - ./config/selfsigned.key:/etc/nginx/ssl/selfsigned.key
       - ./config/selfsigned.crt:/etc/nginx/ssl/selfsigned.crt
     restart: unless-stopped
+    pod: netmaker
 
 volumes:
   netmaker-data:
