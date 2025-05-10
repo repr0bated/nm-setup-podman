@@ -52,8 +52,8 @@ CONFIG_DIR="./config"
 # Prepare broker configuration
 [ ! -f $CONFIG_DIR/emqx.conf ] && cat << EOF > $CONFIG_DIR/emqx.conf
 node {
-  name = "emqx@127.0.0.1"
-  cookie = "emqxsecretcookie"
+  name = "emqx@netmaker-mq"
+  cookie = "$(openssl rand -hex 16)"
 }
 
 listeners.ssl.default {
@@ -128,14 +128,30 @@ fi
 # Generate EMQX certificates
 echo "Generating EMQX certificates..."
 mkdir -p $CONFIG_DIR/emqx-certs
+
+# Generate server certificate for EMQX
 openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 -nodes \
     -keyout $CONFIG_DIR/emqx-certs/server.key \
     -out $CONFIG_DIR/emqx-certs/server.pem \
     -subj "/CN=broker.$DOMAIN" \
     -addext "subjectAltName = DNS:broker.$DOMAIN,DNS:*.broker.$DOMAIN"
 
-# Copy root certificate
-cp $CONFIG_DIR/selfsigned.crt $CONFIG_DIR/emqx-certs/root.pem
+# Use existing selfsigned cert as root CA
+if [ -f $CONFIG_DIR/selfsigned.crt ]; then
+    echo "Using existing certificate as root CA..."
+    cp $CONFIG_DIR/selfsigned.crt $CONFIG_DIR/emqx-certs/root.pem
+else
+    echo "Creating root CA certificate..."
+    openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 -nodes \
+        -keyout $CONFIG_DIR/emqx-certs/root.key \
+        -out $CONFIG_DIR/emqx-certs/root.pem \
+        -subj "/CN=Root CA for $DOMAIN" \
+        -addext "basicConstraints=critical,CA:TRUE"
+fi
+
+# Ensure all files have proper permissions
+chmod 644 $CONFIG_DIR/emqx-certs/*.pem
+chmod 600 $CONFIG_DIR/emqx-certs/*.key
 
 # Prepare reverse proxy configuration
 [ ! -f $CONFIG_DIR/nginx.conf ] && cat << EOF > $CONFIG_DIR/nginx.conf
@@ -216,7 +232,7 @@ services:
       - DATABASE=sqlite
       - NODE_ID=netmaker-server
       - MQ_HOST=netmaker-mq
-      - MQ_PORT=$BROKER_PORT
+      - MQ_PORT=1883
       - TELEMETRY=off
       - VERBOSITY=3
     cap_add:
@@ -235,13 +251,13 @@ services:
     image: emqx/emqx:latest
     container_name: netmaker-mq
     volumes:
-      - ./config/emqx.conf:/opt/emqx/etc/emqx.conf
+      - ./config/emqx.conf:/opt/emqx/etc/emqx.conf:ro
       - netmaker-mq-data:/opt/emqx/data
       - netmaker-mq-logs:/opt/emqx/log
-      - ./config/emqx-certs:/etc/emqx/certs
+      - ./config/emqx-certs:/etc/emqx/certs:ro
     environment:
       - EMQX_NODE__NAME=emqx@netmaker-mq
-      - EMQX_NODE__COOKIE=emqxsecretcookie
+      - EMQX_NODE__COOKIE=$(grep -oP 'cookie = "\K[^"]+' $CONFIG_DIR/emqx.conf)
       - EMQX_NODE__DATA_DIR=/opt/emqx/data
       - EMQX_NODE__DB_BACKEND=mnesia
       - EMQX_CLUSTER__PROTO_DIST=inet_tcp
@@ -274,10 +290,21 @@ volumes:
   netmaker-certs:
 EOF
 
-echo "Setup completed. To start the services, run:"
-echo "podman pod create --name netmaker -p $SERVER_PORT:8443 -p $BROKER_PORT:8883 -p 1883:1883 -p $DASHBOARD_PORT:8080"
-echo "podman-compose up -d"
+echo "Setup completed. Follow these steps to start the services:"
 echo ""
-echo "After services are up, configure EMQX with:"
-echo "podman exec netmaker-mq emqx_ctl users add netmaker netmaker"
-echo "podman exec netmaker-mq emqx_ctl acl add username netmaker topic \"#\" allow"
+echo "1. Create the pod with necessary port mappings:"
+echo "   podman pod create --name netmaker \\"
+echo "     -p $SERVER_PORT:8443 \\"
+echo "     -p $BROKER_PORT:8883 \\"
+echo "     -p 1883:1883 \\"
+echo "     -p $DASHBOARD_PORT:8080"
+echo ""
+echo "2. Start the services:"
+echo "   cd $(pwd) && podman-compose up -d"
+echo ""
+echo "3. Configure EMQX after services are up (wait at least 30 seconds):"
+echo "   podman exec netmaker-mq emqx_ctl users add netmaker netmaker"
+echo "   podman exec netmaker-mq emqx_ctl acl add username netmaker topic \"#\" allow"
+echo ""
+echo "4. Verify the services are running:"
+echo "   podman ps"
