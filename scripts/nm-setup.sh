@@ -38,50 +38,12 @@ DASHBOARD_PORT=${4:-8080}
 # Create state directory if not exists
 [ ! -d $NMDIR ] && mkdir -p $NMDIR
 
-# Create empty pod
-echo "Creating netmaker pod ..."
-podman pod create -n netmaker \
-    -p $SERVER_PORT:8443 \
-    -p $BROKER_PORT:8883 \
-    -p $DASHBOARD_PORT:8080 \
-    -p 8083:8083 \
-    -p 8084:8084 \
-    -p 51821-51830:51821-51830/udp
-
-#
-# Server
-#
-
-# Launch server
-echo "Creating netmaker-server container ..."
-podman run -d --pod netmaker --name netmaker-server \
-    -v netmaker-data:/root/data \
-    -v netmaker-certs:/etc/netmaker \
-    -e SERVER_NAME=broker.$DOMAIN \
-    -e SERVER_API_CONN_STRING=api.$DOMAIN:$SERVER_PORT \
-    -e MASTER_KEY=TODO_REPLACE_MASTER_KEY \
-    -e DATABASE=sqlite \
-    -e NODE_ID=netmaker-server \
-    -e MQ_HOST=localhost \
-    -e MQ_PORT=$BROKER_PORT \
-    -e TELEMETRY=off \
-    -e VERBOSITY="3" \
-    --cap-add NET_ADMIN \
-    --cap-add NET_RAW \
-    --cap-add SYS_MODULE \
-    --sysctl net.ipv4.ip_forward=1 \
-    --sysctl net.ipv4.conf.all.src_valid_mark=1 \
-    --sysctl net.ipv6.conf.all.disable_ipv6=0 \
-    --sysctl net.ipv6.conf.all.forwarding=1 \
-    --restart unless-stopped \
-    gravitl/netmaker:latest
-
-#
-# Broker
-#
+# Create config directory
+CONFIG_DIR=$NMDIR/config
+[ ! -d $CONFIG_DIR ] && mkdir -p $CONFIG_DIR
 
 # Prepare broker configuration
-[ ! -f $NMDIR/emqx.conf ] && cat << EOF > $NMDIR/emqx.conf
+[ ! -f $CONFIG_DIR/emqx.conf ] && cat << EOF > $CONFIG_DIR/emqx.conf
 node {
   name = "emqx@127.0.0.1"
   cookie = "emqxsecretcookie"
@@ -116,60 +78,20 @@ authorization {
 }
 EOF
 
-# Launch broker
-echo "Creating netmaker-mq container ..."
-podman run -d --pod netmaker --name netmaker-mq \
-    -v $NMDIR/emqx.conf:/opt/emqx/etc/emqx.conf \
-    -v netmaker-mq-data:/opt/emqx/data \
-    -v netmaker-mq-logs:/opt/emqx/log \
-    -v netmaker-certs:/etc/emqx/certs \
-    -e EMQX_NODE__NAME="emqx@127.0.0.1" \
-    -e EMQX_NODE__COOKIE="emqxsecretcookie" \
-    -e EMQX_NODE__DATA_DIR="/opt/emqx/data" \
-    -e EMQX_NODE__DB_BACKEND="mnesia" \
-    -e EMQX_CLUSTER__PROTO_DIST="inet_tcp" \
-    -e EMQX_NODE__DIST_NET_TICKTIME="120" \
-    --restart unless-stopped \
-    emqx/emqx:latest
-
-# Wait for EMQX to start
-echo "Waiting for EMQX to start..."
-sleep 10
-
-# Setup EMQX users and permissions
-echo "Setting up EMQX users and permissions..."
-podman exec netmaker-mq emqx_ctl users add netmaker netmaker_password || true
-podman exec netmaker-mq emqx_ctl acl add username netmaker topic "#" allow || true
-
-#
-# UI
-#
-
-# Launch ui
-echo "Creating netmaker-ui container ..."
-podman run -d --pod netmaker --name netmaker-ui \
-    -e BACKEND_URL=https://api.$DOMAIN:$SERVER_PORT \
-    --restart unless-stopped \
-    gravitl/netmaker-ui:latest
-
-#
-# Reverse Proxy
-#
-
 # Prepare reverse proxy certificates
-if [ ! -f $NMDIR/selfsigned.key ]; then
+if [ ! -f $CONFIG_DIR/selfsigned.key ]; then
     echo "Creating netmaker-proxy tls certificates ..."
     openssl req -x509 \
         -newkey rsa:4096 -sha256 \
         -days 3650 -nodes \
-        -keyout $NMDIR/selfsigned.key \
-        -out $NMDIR/selfsigned.crt \
+        -keyout $CONFIG_DIR/selfsigned.key \
+        -out $CONFIG_DIR/selfsigned.crt \
         -subj "/CN=$DOMAIN" \
         -addext "subjectAltName=DNS:$DOMAIN,DNS:*.$DOMAIN"
 fi
 
 # Prepare reverse proxy configuration
-[ ! -f $NMDIR/nginx.conf ] && cat << EOF > $NMDIR/nginx.conf
+[ ! -f $CONFIG_DIR/nginx.conf ] && cat << EOF > $CONFIG_DIR/nginx.conf
 user  nginx;
 worker_processes  auto;
 
@@ -191,17 +113,11 @@ http {
     access_log    /var/log/nginx/access.log  main;
 
     sendfile        on;
-    #tcp_nopush     on;
-
     keepalive_timeout  65;
-
-    #gzip  on;
 
     server {
         listen       8443 ssl;
         server_name api.$DOMAIN;
-
-        #access_log  /var/log/nginx/host.access.log  main;
 
         ssl_certificate /etc/nginx/ssl/selfsigned.crt;
         ssl_certificate_key /etc/nginx/ssl/selfsigned.key;
@@ -210,9 +126,6 @@ http {
             proxy_pass   http://127.0.0.1:8081;
         }
 
-        #error_page  404              /404.html;
-
-        # Redirect server error pages to the static page /50x.html
         error_page   500 502 503 504  /50x.html;
         location = /50x.html {
             root   /usr/share/nginx/html;
@@ -223,8 +136,6 @@ http {
         listen       8080 ssl;
         server_name dashboard.$DOMAIN;
 
-        #access_log  /var/log/nginx/host.access.log  main;
-
         ssl_certificate /etc/nginx/ssl/selfsigned.crt;
         ssl_certificate_key /etc/nginx/ssl/selfsigned.key;
 
@@ -232,9 +143,6 @@ http {
             proxy_pass   http://127.0.0.1:80;
         }
 
-        #error_page  404              /404.html;
-
-        # Redirect server error pages to the static page /50x.html
         error_page   500 502 503 504  /50x.html;
         location = /50x.html {
             root   /usr/share/nginx/html;
@@ -243,11 +151,98 @@ http {
 }
 EOF
 
-# Launch reverse proxy
-echo "Creating netmaker-proxy container ..."
-podman run -d --pod netmaker --name netmaker-proxy \
-    -v $NMDIR/nginx.conf:/etc/nginx/nginx.conf:ro \
-    -v $NMDIR/selfsigned.key:/etc/nginx/ssl/selfsigned.key \
-    -v $NMDIR/selfsigned.crt:/etc/nginx/ssl/selfsigned.crt \
-    --restart unless-stopped \
-    nginx
+# Create podman-compose.yml
+cat << EOF > $NMDIR/podman-compose.yml
+version: '3.8'
+
+services:
+  netmaker-server:
+    image: gravitl/netmaker:latest
+    container_name: netmaker-server
+    volumes:
+      - netmaker-data:/root/data
+      - netmaker-certs:/etc/netmaker
+    environment:
+      - SERVER_NAME=broker.$DOMAIN
+      - SERVER_API_CONN_STRING=api.$DOMAIN:$SERVER_PORT
+      - MASTER_KEY=TODO_REPLACE_MASTER_KEY
+      - DATABASE=sqlite
+      - NODE_ID=netmaker-server
+      - MQ_HOST=localhost
+      - MQ_PORT=$BROKER_PORT
+      - TELEMETRY=off
+      - VERBOSITY=3
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_MODULE
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv4.conf.all.src_valid_mark=1
+      - net.ipv6.conf.all.disable_ipv6=0
+      - net.ipv6.conf.all.forwarding=1
+    restart: unless-stopped
+    ports:
+      - "$SERVER_PORT:8443"
+      - "51821-51830:51821-51830/udp"
+
+  netmaker-mq:
+    image: emqx/emqx:latest
+    container_name: netmaker-mq
+    volumes:
+      - $CONFIG_DIR/emqx.conf:/opt/emqx/etc/emqx.conf
+      - netmaker-mq-data:/opt/emqx/data
+      - netmaker-mq-logs:/opt/emqx/log
+      - netmaker-certs:/etc/emqx/certs
+    environment:
+      - EMQX_NODE__NAME=emqx@127.0.0.1
+      - EMQX_NODE__COOKIE=emqxsecretcookie
+      - EMQX_NODE__DATA_DIR=/opt/emqx/data
+      - EMQX_NODE__DB_BACKEND=mnesia
+      - EMQX_CLUSTER__PROTO_DIST=inet_tcp
+      - EMQX_NODE__DIST_NET_TICKTIME=120
+    restart: unless-stopped
+    ports:
+      - "$BROKER_PORT:8883"
+
+  netmaker-ui:
+    image: gravitl/netmaker-ui:latest
+    container_name: netmaker-ui
+    environment:
+      - BACKEND_URL=https://api.$DOMAIN:$SERVER_PORT
+    restart: unless-stopped
+    ports:
+      - "$DASHBOARD_PORT:8080"
+
+  netmaker-proxy:
+    image: nginx
+    container_name: netmaker-proxy
+    volumes:
+      - $CONFIG_DIR/nginx.conf:/etc/nginx/nginx.conf:ro
+      - $CONFIG_DIR/selfsigned.key:/etc/nginx/ssl/selfsigned.key
+      - $CONFIG_DIR/selfsigned.crt:/etc/nginx/ssl/selfsigned.crt
+    restart: unless-stopped
+    ports:
+      - "8443:8443"
+      - "8080:8080"
+
+volumes:
+  netmaker-data:
+  netmaker-mq-data:
+  netmaker-mq-logs:
+  netmaker-certs:
+EOF
+
+# Start the services
+echo "Starting Netmaker services..."
+cd $NMDIR
+podman-compose up -d
+
+# Wait for EMQX to start
+echo "Waiting for EMQX to start..."
+sleep 10
+
+# Setup EMQX users and permissions
+echo "Setting up EMQX users and permissions..."
+podman exec netmaker-mq emqx_ctl users add netmaker netmaker_password || true
+podman exec netmaker-mq emqx_ctl acl add username netmaker topic "#" allow || true
