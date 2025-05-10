@@ -190,6 +190,8 @@ EOF
 cat << EOF > $NMDIR/podman-compose.yml
 version: '3.8'
 
+name: netmaker
+
 services:
   netmaker-server:
     image: gravitl/netmaker:latest
@@ -217,9 +219,6 @@ services:
       - net.ipv6.conf.all.disable_ipv6=0
       - net.ipv6.conf.all.forwarding=1
     restart: unless-stopped
-    ports:
-      - "$SERVER_PORT:8443"
-      - "51821-51830:51821-51830/udp"
 
   netmaker-mq:
     image: emqx/emqx:latest
@@ -237,8 +236,6 @@ services:
       - EMQX_CLUSTER__PROTO_DIST=inet_tcp
       - EMQX_NODE__DIST_NET_TICKTIME=120
     restart: unless-stopped
-    ports:
-      - "$BROKER_PORT:8883"
 
   netmaker-ui:
     image: gravitl/netmaker-ui:latest
@@ -246,8 +243,6 @@ services:
     environment:
       - BACKEND_URL=https://api.$DOMAIN:$SERVER_PORT
     restart: unless-stopped
-    ports:
-      - "$DASHBOARD_PORT:8080"
 
   netmaker-proxy:
     image: nginx
@@ -257,15 +252,20 @@ services:
       - $CONFIG_DIR/selfsigned.key:/etc/nginx/ssl/selfsigned.key
       - $CONFIG_DIR/selfsigned.crt:/etc/nginx/ssl/selfsigned.crt
     restart: unless-stopped
-    ports:
-      - "8443:8443"
-      - "8080:8080"
 
 volumes:
   netmaker-data:
   netmaker-mq-data:
   netmaker-mq-logs:
   netmaker-certs:
+
+pods:
+  netmaker:
+    ports:
+      - "$SERVER_PORT:8443"
+      - "$BROKER_PORT:8883"
+      - "$DASHBOARD_PORT:8080"
+      - "51821-51830:51821-51830/udp"
 EOF
 
 # Start the services
