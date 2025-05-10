@@ -82,83 +82,25 @@ podman run -d --pod netmaker --name netmaker-server \
 
 # Prepare broker configuration
 [ ! -f $NMDIR/emqx.conf ] && cat << EOF > $NMDIR/emqx.conf
-# Node configuration
 node {
   name = "emqx@127.0.0.1"
   cookie = "emqxsecretcookie"
-  data_dir = "/opt/emqx/data"
-  db_backend = "mnesia"
-  dist_net_ticktime = 120
 }
 
-# Cluster configuration
-cluster {
-  proto_dist = "inet_tcp"
-  discovery = "manual"
-  core_nodes = ["emqx@127.0.0.1"]
-}
-
-# SSL/TLS Listener
 listeners.ssl.default {
   bind = "0.0.0.0:8883"
-  max_connections = 1024000
-  active_n = 100
   ssl_options {
     keyfile = "/etc/emqx/certs/server.key"
     certfile = "/etc/emqx/certs/server.pem"
     cacertfile = "/etc/emqx/certs/root.pem"
     verify = verify_peer
-    fail_if_no_peer_cert = true
-    server_name_indication = disable
   }
 }
 
-# TCP Listener
 listeners.tcp.default {
   bind = "0.0.0.0:1883"
-  max_connections = 1024000
-  active_n = 100
 }
 
-# WebSocket Listener
-listeners.ws.default {
-  bind = "0.0.0.0:8083"
-  max_connections = 1024000
-  active_n = 100
-}
-
-# WebSocket SSL Listener
-listeners.wss.default {
-  bind = "0.0.0.0:8084"
-  max_connections = 1024000
-  active_n = 100
-  ssl_options {
-    keyfile = "/etc/emqx/certs/server.key"
-    certfile = "/etc/emqx/certs/server.pem"
-    cacertfile = "/etc/emqx/certs/root.pem"
-    verify = verify_peer
-    fail_if_no_peer_cert = true
-    server_name_indication = disable
-  }
-}
-
-# Connection Settings
-zone {
-  external {
-    idle_timeout = 15s
-    max_packet_size = 1MB
-    max_clientid_len = 65535
-    max_topic_levels = 7
-    max_qos_allowed = 2
-    max_topic_alias = 32
-    retain_available = true
-    wildcard_subscription = true
-    shared_subscription = true
-    exclusive_subscription = false
-  }
-}
-
-# Authentication
 authentication = [
   {
     mechanism = "password_based"
@@ -167,30 +109,10 @@ authentication = [
   }
 ]
 
-# Authorization
 authorization {
   sources = ["file", "http", "built_in_database"]
   no_match = allow
   deny_action = ignore
-  cache {
-    enable = true
-    max_size = 32
-    ttl = 1h
-  }
-}
-
-# Rate Limiting
-rate_limit {
-  client {
-    rate = "1000/s"
-    burst = 1000
-    initial = 1000
-  }
-  connection {
-    rate = "1000/s"
-    burst = 1000
-    initial = 1000
-  }
 }
 EOF
 
@@ -201,6 +123,12 @@ podman run -d --pod netmaker --name netmaker-mq \
     -v netmaker-mq-data:/opt/emqx/data \
     -v netmaker-mq-logs:/opt/emqx/log \
     -v netmaker-certs:/etc/emqx/certs \
+    -e EMQX_NODE__NAME="emqx@127.0.0.1" \
+    -e EMQX_NODE__COOKIE="emqxsecretcookie" \
+    -e EMQX_NODE__DATA_DIR="/opt/emqx/data" \
+    -e EMQX_NODE__DB_BACKEND="mnesia" \
+    -e EMQX_CLUSTER__PROTO_DIST="inet_tcp" \
+    -e EMQX_NODE__DIST_NET_TICKTIME="120" \
     --restart unless-stopped \
     emqx/emqx:latest
 
