@@ -1,6 +1,29 @@
 #!/bin/bash
 set -e
 
+# Cleanup function
+cleanup() {
+    echo "Cleaning up old configurations..."
+    
+    # Stop and remove existing pod if it exists
+    if podman pod exists netmaker; then
+        echo "Stopping and removing existing netmaker pod..."
+        podman pod stop netmaker
+        podman pod rm netmaker
+    fi
+
+    # Remove old configuration files
+    [ -f $NMDIR/mosquitto.conf ] && rm $NMDIR/mosquitto.conf
+    [ -f $NMDIR/emqx.conf ] && rm $NMDIR/emqx.conf
+
+    # Remove old volumes
+    podman volume rm netmaker-mq-data netmaker-mq-logs 2>/dev/null || true
+    podman volume rm netmaker-data netmaker-certs 2>/dev/null || true
+}
+
+# Call cleanup before starting new setup
+cleanup
+
 # Arguments
 DOMAIN=$1
 SERVER_PORT=${2:-8081}
@@ -21,6 +44,8 @@ podman pod create -n netmaker \
     -p $SERVER_PORT:8443 \
     -p $BROKER_PORT:8883 \
     -p $DASHBOARD_PORT:8080 \
+    -p 8083:8083 \
+    -p 8084:8084 \
     -p 51821-51830:51821-51830/udp
 
 #
@@ -56,30 +81,126 @@ podman run -d --pod netmaker --name netmaker-server \
 #
 
 # Prepare broker configuration
-[ ! -f $NMDIR/mosquitto.conf ] && cat << EOF > $NMDIR/mosquitto.conf
-per_listener_settings true
+[ ! -f $NMDIR/emqx.conf ] && cat << EOF > $NMDIR/emqx.conf
+node {
+  name = "emqx@127.0.0.1"
+  cookie = "emqxsecretcookie"
+}
 
-listener 8883
-allow_anonymous false
-require_certificate true
-use_identity_as_username true
-cafile /mosquitto/certs/root.pem
-certfile /mosquitto/certs/server.pem
-keyfile /mosquitto/certs/server.key
+# SSL/TLS Listener
+listeners.ssl.default {
+  bind = "0.0.0.0:8883"
+  max_connections = 1024000
+  active_n = 100
+  ssl_options {
+    keyfile = "/etc/emqx/certs/server.key"
+    certfile = "/etc/emqx/certs/server.pem"
+    cacertfile = "/etc/emqx/certs/root.pem"
+    verify = verify_peer
+    fail_if_no_peer_cert = true
+    server_name_indication = disable
+  }
+}
 
-listener 1883
-allow_anonymous true
+# TCP Listener
+listeners.tcp.default {
+  bind = "0.0.0.0:1883"
+  max_connections = 1024000
+  active_n = 100
+}
+
+# WebSocket Listener
+listeners.ws.default {
+  bind = "0.0.0.0:8083"
+  max_connections = 1024000
+  active_n = 100
+}
+
+# WebSocket SSL Listener
+listeners.wss.default {
+  bind = "0.0.0.0:8084"
+  max_connections = 1024000
+  active_n = 100
+  ssl_options {
+    keyfile = "/etc/emqx/certs/server.key"
+    certfile = "/etc/emqx/certs/server.pem"
+    cacertfile = "/etc/emqx/certs/root.pem"
+    verify = verify_peer
+    fail_if_no_peer_cert = true
+    server_name_indication = disable
+  }
+}
+
+# Connection Settings
+zone {
+  external {
+    idle_timeout = 15s
+    max_packet_size = 1MB
+    max_clientid_len = 65535
+    max_topic_levels = 7
+    max_qos_allowed = 2
+    max_topic_alias = 32
+    retain_available = true
+    wildcard_subscription = true
+    shared_subscription = true
+    exclusive_subscription = false
+  }
+}
+
+# Authentication
+authentication = [
+  {
+    mechanism = "password_based"
+    backend = "built_in_database"
+    enable = true
+  }
+]
+
+# Authorization
+authorization {
+  sources = ["file", "http", "built_in_database"]
+  no_match = allow
+  deny_action = ignore
+  cache {
+    enable = true
+    max_size = 32
+    ttl = 1h
+  }
+}
+
+# Rate Limiting
+rate_limit {
+  client {
+    rate = "1000/s"
+    burst = 1000
+    initial = 1000
+  }
+  connection {
+    rate = "1000/s"
+    burst = 1000
+    initial = 1000
+  }
+}
 EOF
 
 # Launch broker
 echo "Creating netmaker-mq container ..."
 podman run -d --pod netmaker --name netmaker-mq \
-    -v $NMDIR/mosquitto.conf:/mosquitto/config/mosquitto.conf \
-    -v netmaker-mq-data:/mosquitto/data \
-    -v netmaker-mq-logs:/mosquitto/log \
-    -v netmaker-certs:/mosquitto/certs \
+    -v $NMDIR/emqx.conf:/opt/emqx/etc/emqx.conf \
+    -v netmaker-mq-data:/opt/emqx/data \
+    -v netmaker-mq-logs:/opt/emqx/log \
+    -v netmaker-certs:/etc/emqx/certs \
     --restart unless-stopped \
-    eclipse-mosquitto:2.0-openssl
+    emqx/emqx:latest
+
+# Wait for EMQX to start
+echo "Waiting for EMQX to start..."
+sleep 10
+
+# Setup EMQX users and permissions
+echo "Setting up EMQX users and permissions..."
+podman exec netmaker-mq emqx_ctl users add netmaker netmaker_password || true
+podman exec netmaker-mq emqx_ctl acl add username netmaker topic "#" allow || true
 
 #
 # UI
