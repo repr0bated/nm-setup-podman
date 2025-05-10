@@ -97,9 +97,10 @@ openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 -nodes \
 # Copy root certificate
 cp $CONFIG_DIR/selfsigned.crt $CONFIG_DIR/emqx-certs/root.pem
 
-# Create EMQX certs volume
+# Create EMQX certs volume and copy certificates
+echo "Setting up EMQX certificates..."
 podman volume create netmaker-certs
-podman run --rm -v netmaker-certs:/certs -v $CONFIG_DIR/emqx-certs:/source alpine sh -c "cp /source/* /certs/"
+podman run --rm -v netmaker-certs:/certs -v $CONFIG_DIR/emqx-certs:/source alpine sh -c "cp /source/server.key /certs/ && cp /source/server.pem /certs/ && cp /source/root.pem /certs/"
 
 # Prepare reverse proxy certificates
 if [ ! -f $CONFIG_DIR/selfsigned.key ]; then
