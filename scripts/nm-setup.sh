@@ -277,9 +277,38 @@ podman-compose up -d
 
 # Wait for EMQX to start
 echo "Waiting for EMQX to start..."
-sleep 10
+max_attempts=30
+attempt=1
+while [ $attempt -le $max_attempts ]; do
+    if podman exec netmaker-mq emqx_ctl status >/dev/null 2>&1; then
+        echo "EMQX is ready!"
+        break
+    fi
+    echo "Waiting for EMQX to start (attempt $attempt/$max_attempts)..."
+    sleep 2
+    attempt=$((attempt + 1))
+done
+
+if [ $attempt -gt $max_attempts ]; then
+    echo "Error: EMQX failed to start within the expected time"
+    exit 1
+fi
 
 # Setup EMQX users and permissions
 echo "Setting up EMQX users and permissions..."
-podman exec netmaker-mq emqx_ctl users add netmaker netmaker_password || true
-podman exec netmaker-mq emqx_ctl acl add username netmaker topic "#" allow || true
+# Wait a bit more to ensure EMQX is fully initialized
+sleep 5
+
+# Add user if it doesn't exist
+if ! podman exec netmaker-mq emqx_ctl users list | grep -q "netmaker"; then
+    echo "Creating EMQX user..."
+    podman exec netmaker-mq emqx_ctl users add netmaker netmaker_password
+fi
+
+# Add ACL if it doesn't exist
+if ! podman exec netmaker-mq emqx_ctl acl list | grep -q "netmaker"; then
+    echo "Setting up EMQX ACL..."
+    podman exec netmaker-mq emqx_ctl acl add username netmaker topic "#" allow
+fi
+
+echo "EMQX configuration completed successfully"
